@@ -4,7 +4,7 @@
 
 ### 1. Create GitHub Repository
 ```bash
-git clone https://github.com/YOUR_USERNAME/nabi_robot.git
+git clone https://github.com/NguyenNgocKy99/NABI_ROBOT.git
 cd nabi_robot
 ```
 
@@ -17,7 +17,7 @@ cd nabi_robot
 
 ### 3. Test Backend
 ```bash
-curl https://YOUR_RAILWAY_URL/health
+curl https://web-production-4f0df.up.railway.app/health
 ```
 
 ## ESP32 Setup
@@ -38,9 +38,9 @@ Download: https://www.arduino.cc/en/software
 ### 4. Configuration
 Edit `firmware/config.h`:
 ```cpp
-#define WIFI_SSID "YOUR_SSID"
-#define WIFI_PASSWORD "YOUR_PASSWORD"
-#define SERVER_URL "https://your-railway-url.railway.app"
+#define WIFI_SSID "C0p2Ec2-WLAN"
+#define WIFI_PASSWORD "4Emah5LdS"
+#define SERVER_URL "https://web-production-4f0df.up.railway.app"
 ```
 
 ### 5. Upload
@@ -53,14 +53,14 @@ Edit `firmware/config.h`:
 
 ### Test Sensor Data
 ```bash
-curl -X POST https://YOUR_RAILWAY_URL/api/sensor \
+curl -X POST https://web-production-4f0df.up.railway.app/api/sensor \
   -H "Content-Type: application/json" \
   -d '{"temperature":28.5,"humidity":60,"motion":1,"battery":85}'
 ```
 
 ### Test Command
 ```bash
-curl https://YOUR_RAILWAY_URL/api/command
+curl https://web-production-4f0df.up.railway.app/api/command
 ```
 
 ### View Logs

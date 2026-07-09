@@ -175,18 +175,18 @@ GET /api/status
 
 ```bash
 # Health check
-curl https://web-production-4f0df.up.railway.app/health
+curl https://nabirob-production.up.railway.app
 
 # Send sensor data
-curl -X POST https://web-production-4f0df.up.railway.app/api/sensor `
+curl -X POST https://nabirob-production.up.railway.app/api/sensor `
   -H "Content-Type: application/json" `
   -d '{"temperature":28.5,"humidity":60,"motion":1,"battery":85}'
 
 # Get command
-curl https://web-production-4f0df.up.railway.app/api/command
+curl https://nabirob-production.up.railway.app/api/command
 
 # Send command
-curl -X POST https://web-production-4f0df.up.railway.app/api/command/send `
+curl -X POST https://nabirob-production.up.railway.app/api/command/send `
   -H "Content-Type: application/json" `
   -d '{"action":"move_forward","duration":2000,"speed":200}'
 ```
@@ -199,7 +199,7 @@ curl -X POST https://web-production-4f0df.up.railway.app/api/command/send `
 // Send sensor data
 void sendSensorData() {
   HTTPClient http;
-  http.begin("https://web-production-4f0df.up.railway.app/api/sensor");
+  http.begin("https://nabirob-production.up.railway.app/api/sensor");
   http.addHeader("Content-Type", "application/json");
   
   String json = "{\"temperature\":28.5,\"humidity\":60,\"motion\":1,\"battery\":85}";
@@ -210,7 +210,7 @@ void sendSensorData() {
 // Get command
 void getCommand() {
   HTTPClient http;
-  http.begin("https://web-production-4f0df.up.railway.app/api/command");
+  http.begin("https://nabirob-production.up.railway.app/api/command");
   
   if (http.GET() == 200) {
     String response = http.getString();

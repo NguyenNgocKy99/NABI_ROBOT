@@ -6,7 +6,7 @@
 #define WIFI_PASSWORD "4Emah5LdS"
 
 // ============ Server Configuration ============
-#define SERVER_URL "https://web-production-4f0df.up.railway.app"
+#define SERVER_URL "https://nabirob-production.up.railway.app"
 
 // ============ Pin Configuration (ESP32) ============
 #define MOTOR_PIN1 12      // Motor IN1
