@@ -18,8 +18,8 @@ const DEBUG = process.env.DEBUG || 1;
 const app = express();
 app.use(express.json());
 
-// Serve web-dashboard
-app.use(express.static(path.join(__dirname, '../web-dashboard')));
+// 🌟 FIX: Đổi đường dẫn trỏ thẳng vào thư mục "public" nằm cùng cấp với server.js
+app.use(express.static(path.join(__dirname, 'public')));
 
 // ============ HTTP ENDPOINTS ============
 
@@ -173,7 +173,7 @@ async function handleVoiceText(ws, data, robotId) {
         ws.send(JSON.stringify({
             event: 'ai_response',
             reply: aiResponse.data.reply || 'No response',
-            command: aiResponse.data.command || 'idle',
+            command: aiResponse.data.command || 'idle', // command lúc này là 1 Object (action, speed, duration)
             timestamp: formatTime()
         }));
         
