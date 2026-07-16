@@ -5,13 +5,14 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>🤖 Nabi Robot Dashboard</title>
     <link rel="stylesheet" href="style.css">
+    <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
 </head>
 <body>
     <div class="container">
         <!-- Header -->
         <header class="header">
             <h1>🤖 Nabi Robot Control Panel</h1>
-            <p class="subtitle">Smart Voice Interactive Robot Dashboard</p>
+            <p class="subtitle">Smart Voice Interactive Robot Dashboard (WebSocket)</p>
         </header>
 
         <!-- Server Connection Status -->
@@ -23,6 +24,10 @@
             <div class="status-item">
                 <span class="status-label">Robot:</span>
                 <span id="robotStatus" class="status-badge offline">Offline</span>
+            </div>
+            <div class="status-item">
+                <span class="status-label">Connected Clients:</span>
+                <span id="clientCount" class="status-value">0</span>
             </div>
             <div class="status-item">
                 <span class="status-label">Last Update:</span>
@@ -84,7 +89,7 @@
                 <section class="card actions-card">
                     <h2>⚡ Quick Actions</h2>
                     <button class="btn btn-primary" onclick="testConnection()">🔍 Test Connection</button>
-                    <button class="btn btn-info" onclick="refreshData()">🔄 Refresh Data</button>
+                    <button class="btn btn-info" onclick="requestStatus()">📊 Request Status</button>
                     <button class="btn btn-warning" onclick="clearHistory()">🗑️ Clear History</button>
                 </section>
             </div>
@@ -93,7 +98,7 @@
             <div class="column-right">
                 <!-- Sensor Status -->
                 <section class="card sensor-card">
-                    <h2>📊 Sensor Data</h2>
+                    <h2>📊 Real-time Sensor Data</h2>
                     
                     <div class="sensor-grid">
                         <div class="sensor-item">
@@ -124,8 +129,6 @@
                             <span class="sensor-unit">%</span>
                         </div>
                     </div>
-
-                    <button class="btn btn-primary" onclick="getLatestSensor()">Update Sensors</button>
                 </section>
 
                 <!-- Sensor History -->
@@ -140,10 +143,10 @@
 
         <!-- Logs Section -->
         <section class="card logs-card">
-            <h2>📋 Logs</h2>
+            <h2>📋 WebSocket Logs</h2>
             <div id="logs" class="logs-container">
                 <p class="log-entry">🟢 Dashboard initialized</p>
-                <p class="log-entry">📍 Waiting for server connection...</p>
+                <p class="log-entry">📍 Connecting to WebSocket server...</p>
             </div>
         </section>
     </div>

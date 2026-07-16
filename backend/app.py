@@ -1,5 +1,6 @@
-from flask import Flask, request, jsonify
+from flask import Flask, render_template, request, jsonify
 from flask_cors import CORS
+from flask_socketio import SocketIO, emit, join_room, leave_room
 from datetime import datetime
 import json
 import os
@@ -7,46 +8,58 @@ import os
 app = Flask(__name__)
 CORS(app)
 
+# SocketIO Setup
+socketio = SocketIO(app, cors_allowed_origins="*")
+
 # Database giả (In-Memory)
-# Trong production có thể dùng Database thực
 database = {
     "robot_status": "online",
     "last_update": None,
     "sensor_history": [],
-    "commands": []
+    "commands": [],
+    "connected_clients": 0
 }
+
+# Connected clients tracking
+connected_robots = {}
 
 # ============ UTILITY FUNCTIONS ============
 
-def log_request(endpoint, method, data=None):
-    """Log request để debug"""
+def log_message(message, msg_type="info"):
+    """Log messages with timestamp"""
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    print(f"[{timestamp}] {method} {endpoint} - Data: {data}")
+    emoji = {
+        "info": "ℹ️",
+        "success": "✅",
+        "error": "❌",
+        "websocket": "🔌",
+        "sensor": "📊",
+        "command": "⚡"
+    }
+    print(f"[{timestamp}] {emoji.get(msg_type, '•')} {message}")
 
-def save_to_database(key, value):
-    """Lưu dữ liệu vào database giả"""
-    database[key] = value
-
-# ============ HEALTH CHECK ============
+# ============ HTTP ENDPOINTS ============
 
 @app.route('/', methods=['GET'])
 def home():
-    """Trang chủ - Kiểm tra server hoạt động"""
+    """Trang chủ"""
     return jsonify({
         "status": "online",
-        "message": "🤖 Nabi Robot Backend Server",
-        "version": "1.0.0",
-        "timestamp": datetime.now().isoformat()
+        "message": "🤖 Nabi Robot Backend Server (WebSocket)",
+        "version": "2.0.0",
+        "timestamp": datetime.now().isoformat(),
+        "websocket": "Enabled"
     })
 
 @app.route('/health', methods=['GET'])
 def health_check():
-    """Health check endpoint (AWS/Railway dùng để monitor)"""
-    log_request('/health', 'GET')
+    """Health check endpoint"""
+    log_message("Health check requested", "info")
     
     return jsonify({
         "status": "ok",
         "message": "Server is running",
+        "websocket_connected": len(connected_robots),
         "timestamp": datetime.now().isoformat()
     }), 200
 
@@ -54,70 +67,46 @@ def health_check():
 
 @app.route('/api/sensor', methods=['POST'])
 def receive_sensor_data():
-    """
-    ESP32 gửi dữ liệu cảm biến lên server
-    
-    Request JSON:
-    {
-        "temperature": 28.5,
-        "humidity": 60,
-        "motion": 1,
-        "battery": 85,
-        "timestamp": "2024-01-15T10:30:00"
-    }
-    """
+    """HTTP endpoint để nhận sensor data (fallback)"""
     try:
         data = request.get_json()
+        log_message(f"Sensor data received via HTTP: {data}", "sensor")
         
-        log_request('/api/sensor', 'POST', data)
-        
-        # Lưu vào database
         sensor_entry = {
             "timestamp": datetime.now().isoformat(),
             "data": data
         }
         database["sensor_history"].append(sensor_entry)
         
-        # Giới hạn lịch sử (giữ 100 entry cuối)
         if len(database["sensor_history"]) > 100:
             database["sensor_history"].pop(0)
         
         database["last_update"] = datetime.now().isoformat()
         
-        # Response
+        # Broadcast to all connected clients
+        socketio.emit('sensor_update', sensor_entry, broadcast=True)
+        
         return jsonify({
             "status": "success",
             "message": "Sensor data received",
-            "data_id": len(database["sensor_history"]),
-            "server_time": datetime.now().isoformat()
+            "data_id": len(database["sensor_history"])
         }), 200
         
     except Exception as e:
-        print(f"❌ Error in /api/sensor: {e}")
-        return jsonify({
-            "status": "error",
-            "message": str(e)
-        }), 400
+        log_message(f"Error in sensor endpoint: {e}", "error")
+        return jsonify({"status": "error", "message": str(e)}), 400
 
 @app.route('/api/sensor/latest', methods=['GET'])
 def get_latest_sensor():
-    """Lấy dữ liệu cảm biến mới nhất"""
-    log_request('/api/sensor/latest', 'GET')
-    
+    """Lấy sensor data mới nhất"""
     if database["sensor_history"]:
-        latest = database["sensor_history"][-1]
-        return jsonify(latest), 200
+        return jsonify(database["sensor_history"][-1]), 200
     else:
-        return jsonify({
-            "status": "no_data",
-            "message": "Chưa có dữ liệu cảm biến"
-        }), 404
+        return jsonify({"status": "no_data"}), 404
 
 @app.route('/api/sensor/history', methods=['GET'])
 def get_sensor_history():
-    """Lấy tất cả lịch sử cảm biến"""
-    log_request('/api/sensor/history', 'GET')
-    
+    """Lấy sensor history"""
     limit = request.args.get('limit', 10, type=int)
     history = database["sensor_history"][-limit:]
     
@@ -130,20 +119,7 @@ def get_sensor_history():
 
 @app.route('/api/command', methods=['GET'])
 def get_command():
-    """
-    ESP32 lấy lệnh từ server
-    
-    Response JSON:
-    {
-        "action": "move_forward",
-        "duration": 1000,
-        "speed": 200,
-        "timestamp": "2024-01-15T10:30:00"
-    }
-    """
-    log_request('/api/command', 'GET')
-    
-    # Lệnh mặc định (idle)
+    """HTTP endpoint để robot polling commands (fallback)"""
     command = {
         "action": "idle",
         "duration": 0,
@@ -151,29 +127,18 @@ def get_command():
         "timestamp": datetime.now().isoformat()
     }
     
-    # Nếu có lệnh trong database, gửi lệnh đó
     if database["commands"]:
         command = database["commands"].pop(0)
-        print(f"📤 Sending command: {command}")
+        log_message(f"Command sent via HTTP: {command}", "command")
     
     return jsonify(command), 200
 
 @app.route('/api/command/send', methods=['POST'])
 def send_command():
-    """
-    Gửi lệnh từ web dashboard / mobile
-    
-    Request JSON:
-    {
-        "action": "move_forward",
-        "duration": 2000,
-        "speed": 255
-    }
-    """
+    """Gửi command"""
     try:
         data = request.get_json()
-        
-        log_request('/api/command/send', 'POST', data)
+        log_message(f"Command received: {data}", "command")
         
         command = {
             "action": data.get("action", "idle"),
@@ -182,8 +147,10 @@ def send_command():
             "timestamp": datetime.now().isoformat()
         }
         
-        # Thêm vào queue
         database["commands"].append(command)
+        
+        # Broadcast command to all connected robots
+        socketio.emit('robot_command', command, broadcast=True)
         
         return jsonify({
             "status": "success",
@@ -192,122 +159,188 @@ def send_command():
         }), 200
         
     except Exception as e:
-        print(f"❌ Error in /api/command/send: {e}")
-        return jsonify({
-            "status": "error",
-            "message": str(e)
-        }), 400
+        log_message(f"Error in command endpoint: {e}", "error")
+        return jsonify({"status": "error", "message": str(e)}), 400
 
 # ============ STATUS ENDPOINTS ============
 
 @app.route('/api/status', methods=['GET'])
 def get_status():
-    """Lấy trạng thái toàn bộ robot"""
-    log_request('/api/status', 'GET')
-    
+    """Lấy robot status"""
     return jsonify({
         "robot_status": database["robot_status"],
         "last_update": database["last_update"],
         "sensor_count": len(database["sensor_history"]),
         "pending_commands": len(database["commands"]),
+        "websocket_clients": len(connected_robots),
         "server_time": datetime.now().isoformat()
     }), 200
 
 @app.route('/api/status/update', methods=['POST'])
 def update_status():
-    """Robot gửi cập nhật trạng thái"""
+    """Cập nhật robot status"""
     try:
         data = request.get_json()
-        
-        log_request('/api/status/update', 'POST', data)
-        
         database["robot_status"] = data.get("status", "unknown")
         database["last_update"] = datetime.now().isoformat()
         
-        return jsonify({
-            "status": "success",
-            "message": "Status updated"
-        }), 200
+        # Broadcast status update
+        socketio.emit('status_update', {
+            "status": database["robot_status"],
+            "timestamp": database["last_update"]
+        }, broadcast=True)
         
+        return jsonify({"status": "success"}), 200
     except Exception as e:
-        return jsonify({
-            "status": "error",
-            "message": str(e)
-        }), 400
+        return jsonify({"status": "error", "message": str(e)}), 400
 
-# ============ MESSAGE ENDPOINTS ============
-
-@app.route('/api/message', methods=['POST'])
-def receive_message():
-    """Robot gửi tin nhắn"""
-    try:
-        data = request.get_json()
-        msg = data.get("message", "")
-        
-        log_request('/api/message', 'POST', {"message": msg})
-        
-        print(f"💬 Message from Nabi: {msg}")
-        
-        return jsonify({
-            "status": "ok",
-            "message": "Message received"
-        }), 200
-        
-    except Exception as e:
-        return jsonify({
-            "status": "error",
-            "message": str(e)
-        }), 400
-
-# ============ DEBUG / ADMIN ENDPOINTS ============
+# ============ DEBUG ENDPOINTS ============
 
 @app.route('/api/debug', methods=['GET'])
 def debug_info():
-    """Thông tin debug (chỉ dùng trong dev)"""
-    log_request('/api/debug', 'GET')
-    
+    """Debug info"""
     return jsonify({
         "database": database,
+        "connected_robots": len(connected_robots),
         "server_time": datetime.now().isoformat()
     }), 200
 
 @app.route('/api/debug/reset', methods=['POST'])
 def debug_reset():
-    """Reset database (chỉ dùng trong dev)"""
+    """Reset database"""
     global database
-    
     database = {
         "robot_status": "online",
         "last_update": None,
         "sensor_history": [],
-        "commands": []
+        "commands": [],
+        "connected_clients": 0
+    }
+    log_message("Database reset!", "success")
+    return jsonify({"status": "ok"}), 200
+
+# ============ WEBSOCKET EVENTS ============
+
+@socketio.on('connect')
+def handle_connect():
+    """Robot/Client connects"""
+    client_id = request.sid
+    connected_robots[client_id] = {
+        "connected_at": datetime.now().isoformat(),
+        "type": "unknown"
     }
     
-    print("🔄 Database reset!")
+    log_message(f"Client connected: {client_id} (Total: {len(connected_robots)})", "websocket")
     
-    return jsonify({
-        "status": "ok",
-        "message": "Database reset"
-    }), 200
+    # Send welcome message
+    emit('welcome', {
+        "message": "Connected to Nabi Backend",
+        "client_id": client_id,
+        "timestamp": datetime.now().isoformat()
+    })
+    
+    # Broadcast connection count
+    socketio.emit('client_count', {"count": len(connected_robots)}, broadcast=True)
+
+@socketio.on('disconnect')
+def handle_disconnect():
+    """Client disconnects"""
+    client_id = request.sid
+    if client_id in connected_robots:
+        del connected_robots[client_id]
+    
+    log_message(f"Client disconnected: {client_id} (Total: {len(connected_robots)})", "websocket")
+    
+    # Broadcast updated count
+    socketio.emit('client_count', {"count": len(connected_robots)}, broadcast=True)
+
+@socketio.on('sensor_data')
+def handle_sensor_data(data):
+    """Receive sensor data from robot"""
+    client_id = request.sid
+    connected_robots[client_id]["type"] = "robot"
+    
+    log_message(f"Sensor data from robot: {data}", "sensor")
+    
+    sensor_entry = {
+        "timestamp": datetime.now().isoformat(),
+        "data": data,
+        "robot_id": client_id
+    }
+    
+    database["sensor_history"].append(sensor_entry)
+    if len(database["sensor_history"]) > 100:
+        database["sensor_history"].pop(0)
+    
+    database["last_update"] = datetime.now().isoformat()
+    
+    # Broadcast sensor data to all clients (web dashboard)
+    emit('sensor_update', sensor_entry, broadcast=True, include_self=False)
+    
+    # Acknowledge to sender
+    emit('ack', {"message": "Sensor data received"})
+
+@socketio.on('send_command')
+def handle_send_command(data):
+    """Send command to robot"""
+    client_id = request.sid
+    
+    log_message(f"Command request: {data}", "command")
+    
+    command = {
+        "action": data.get("action", "idle"),
+        "duration": data.get("duration", 0),
+        "speed": data.get("speed", 0),
+        "timestamp": datetime.now().isoformat()
+    }
+    
+    # Broadcast command to all robots
+    emit('robot_command', command, broadcast=True, include_self=False)
+    
+    # Acknowledge to sender
+    emit('ack', {"message": "Command sent"})
+
+@socketio.on('request_status')
+def handle_request_status():
+    """Client requests current status"""
+    status = {
+        "robot_status": database["robot_status"],
+        "last_update": database["last_update"],
+        "sensor_count": len(database["sensor_history"]),
+        "pending_commands": len(database["commands"]),
+        "connected_clients": len(connected_robots),
+        "timestamp": datetime.now().isoformat()
+    }
+    
+    emit('status_response', status)
+
+@socketio.on('heartbeat')
+def handle_heartbeat():
+    """Heartbeat/ping from client"""
+    emit('heartbeat_ack', {"timestamp": datetime.now().isoformat()})
+
+@socketio.on('identify')
+def handle_identify(data):
+    """Client identifies itself (robot or dashboard)"""
+    client_id = request.sid
+    client_type = data.get("type", "unknown")
+    
+    if client_id in connected_robots:
+        connected_robots[client_id]["type"] = client_type
+    
+    log_message(f"Client identified as {client_type}: {client_id}", "websocket")
+    
+    emit('identification_ack', {"type": client_type})
 
 # ============ ERROR HANDLERS ============
 
 @app.errorhandler(404)
 def not_found(error):
-    """404 Not Found"""
-    return jsonify({
-        "status": "error",
-        "message": "Endpoint not found",
-        "path": request.path
-    }), 404
+    return jsonify({"status": "error", "message": "Endpoint not found"}), 404
 
 @app.errorhandler(500)
 def server_error(error):
-    """500 Server Error"""
-    return jsonify({
-        "status": "error",
-        "message": "Internal server error"
-    }), 500
+    return jsonify({"status": "error", "message": "Internal server error"}), 500
 
 # ============ MAIN ============
 
@@ -315,16 +348,17 @@ if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     
     print("\n" + "="*50)
-    print("🤖 NABI ROBOT BACKEND SERVER")
+    print("🤖 NABI ROBOT BACKEND SERVER v2.0")
     print("="*50)
     print(f"✓ Running on port {port}")
-    print(f"✓ Flask environment: {os.environ.get('FLASK_ENV', 'production')}")
+    print(f"✓ WebSocket: Enabled")
     print(f"✓ Start time: {datetime.now().isoformat()}")
     print("="*50 + "\n")
     
-    app.run(
+    socketio.run(
+        app,
         host='0.0.0.0',
         port=port,
         debug=False,
-        threaded=True
+        allow_unsafe_werkzeug=True
     )

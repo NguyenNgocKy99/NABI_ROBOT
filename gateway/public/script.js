@@ -1,23 +1,102 @@
 // ============ CONFIG ============
-const SERVER_URL = "https://nabirob-production.up.railway.app";
-
+const SERVER_URL = "https://nabirob-production-916d.up.railway.app";
 
 // ============ STATE ============
+let socket = null;
 let sensorHistory = [];
-let lastUpdate = null;
+let isConnected = false;
 
 // ============ INITIALIZATION ============
 document.addEventListener('DOMContentLoaded', function() {
     console.log("Dashboard loaded");
     addLog("🟢 Dashboard initialized", 'success');
-    testConnection();
+    
+    // Connect to WebSocket
+    connectToServer();
+    
     updateTime();
     setInterval(updateTime, 1000);
-    setInterval(autoRefresh, SENSOR_INTERVAL);
+    
+    // Setup slider listeners
+    setupSliders();
 });
 
+// ============ WEBSOCKET CONNECTION ============
+
+function connectToServer() {
+    addLog("🔌 Connecting to WebSocket server...", 'info');
+    
+    socket = io(SERVER_URL, {
+        reconnection: true,
+        reconnectionDelay: 1000,
+        reconnectionDelayMax: 5000,
+        reconnectionAttempts: Infinity,
+        transports: ['websocket', 'polling']
+    });
+    
+    // Connection events
+    socket.on('connect', function() {
+        isConnected = true;
+        console.log("✅ Connected to server");
+        setServerStatus(true);
+        addLog("✅ WebSocket connected!", 'success');
+        
+        // Identify as dashboard
+        socket.emit('identify', { type: 'dashboard' });
+        
+        // Request current status
+        socket.emit('request_status');
+    });
+    
+    socket.on('disconnect', function() {
+        isConnected = false;
+        console.log("❌ Disconnected from server");
+        setServerStatus(false);
+        addLog("❌ WebSocket disconnected", 'error');
+    });
+    
+    // Receive events
+    socket.on('welcome', function(data) {
+        console.log("Welcome:", data);
+        addLog("🎉 " + data.message, 'success');
+    });
+    
+    socket.on('sensor_update', function(data) {
+        console.log("Sensor update:", data);
+        if (data.data) {
+            updateSensorDisplay(data.data);
+            addSensorToHistory(data);
+            setRobotStatus(true);
+            addLog("📊 Sensor data received", 'success');
+        }
+    });
+    
+    socket.on('status_response', function(data) {
+        console.log("Status response:", data);
+        addLog(`📊 Clients connected: ${data.connected_clients}`, 'info');
+        document.getElementById('clientCount').textContent = data.connected_clients;
+    });
+    
+    socket.on('ack', function(data) {
+        console.log("Acknowledgement:", data);
+        addLog("✓ " + data.message, 'success');
+    });
+    
+    socket.on('heartbeat_ack', function(data) {
+        console.log("Heartbeat acknowledged");
+    });
+    
+    socket.on('client_count', function(data) {
+        document.getElementById('clientCount').textContent = data.count;
+    });
+    
+    socket.on('error', function(error) {
+        console.error("Socket error:", error);
+        addLog("❌ Error: " + error, 'error');
+    });
+}
+
 // ============ UPDATE TIME ============
-const SENSOR_INTERVAL = 10000; // 10 seconds
 
 function updateTime() {
     const now = new Date();
@@ -25,26 +104,7 @@ function updateTime() {
     document.getElementById('lastUpdate').textContent = timeStr;
 }
 
-// ============ CONNECTION TEST ============
-function testConnection() {
-    addLog("🔍 Testing server connection...", 'info');
-    
-    fetch(SERVER_URL + '/health')
-        .then(response => {
-            if (response.ok) {
-                setServerStatus(true);
-                addLog("✅ Server connected", 'success');
-                getLatestSensor();
-            } else {
-                setServerStatus(false);
-                addLog("❌ Server error: " + response.status, 'error');
-            }
-        })
-        .catch(error => {
-            setServerStatus(false);
-            addLog("❌ Connection failed: " + error, 'error');
-        });
-}
+// ============ CONNECTION STATUS ============
 
 function setServerStatus(online) {
     const badge = document.getElementById('serverStatus');
@@ -68,23 +128,21 @@ function setRobotStatus(online) {
     }
 }
 
-// ============ SENSOR DATA ============
-function getLatestSensor() {
-    fetch(SERVER_URL + '/api/sensor/latest')
-        .then(response => response.json())
-        .then(data => {
-            if (data.timestamp) {
-                updateSensorDisplay(data.data);
-                addSensorToHistory(data);
-                setRobotStatus(true);
-                addLog("📊 Sensor data updated", 'success');
-            }
-        })
-        .catch(error => {
-            setRobotStatus(false);
-            addLog("❌ Sensor fetch failed: " + error, 'error');
-        });
+// ============ TEST CONNECTION ============
+
+function testConnection() {
+    addLog("🔍 Testing connection...", 'info');
+    
+    if (!isConnected) {
+        addLog("❌ Not connected to server", 'error');
+        return;
+    }
+    
+    socket.emit('request_status');
+    addLog("✅ Connection test sent", 'success');
 }
+
+// ============ SENSOR DATA ============
 
 function updateSensorDisplay(data) {
     document.getElementById('tempValue').textContent = 
@@ -132,6 +190,7 @@ function updateHistoryDisplay() {
 }
 
 // ============ MOTOR CONTROL ============
+
 function moveForward() {
     const speed = parseInt(document.getElementById('speedSlider').value);
     const duration = parseInt(document.getElementById('durationSlider').value);
@@ -169,6 +228,11 @@ function ledOff() {
 }
 
 function sendCommand(action, duration, speed) {
+    if (!isConnected) {
+        addLog("❌ Not connected to server", 'error');
+        return;
+    }
+    
     addLog(`⚡ Sending command: ${action}`, 'info');
     
     const commandData = {
@@ -177,28 +241,25 @@ function sendCommand(action, duration, speed) {
         speed: speed
     };
     
-    fetch(SERVER_URL + '/api/command/send', {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json'
-        },
-        body: JSON.stringify(commandData)
-    })
-        .then(response => response.json())
-        .then(data => {
-            if (data.status === 'success') {
-                addLog(`✅ Command sent: ${action}`, 'success');
-            } else {
-                addLog(`❌ Command failed: ${data.message}`, 'error');
-            }
-        })
-        .catch(error => {
-            addLog(`❌ Send failed: ${error}`, 'error');
-        });
+    // Emit via WebSocket
+    socket.emit('send_command', commandData);
 }
 
-// ============ SPEED & DURATION CONTROLS ============
-document.addEventListener('DOMContentLoaded', function() {
+// ============ REQUEST STATUS ============
+
+function requestStatus() {
+    if (!isConnected) {
+        addLog("❌ Not connected to server", 'error');
+        return;
+    }
+    
+    addLog("📊 Requesting status...", 'info');
+    socket.emit('request_status');
+}
+
+// ============ SLIDER SETUP ============
+
+function setupSliders() {
     document.getElementById('speedSlider').addEventListener('input', function() {
         document.getElementById('speedValue').textContent = this.value;
     });
@@ -206,18 +267,9 @@ document.addEventListener('DOMContentLoaded', function() {
     document.getElementById('durationSlider').addEventListener('input', function() {
         document.getElementById('durationValue').textContent = this.value;
     });
-});
+}
 
 // ============ UTILITY FUNCTIONS ============
-function refreshData() {
-    addLog("🔄 Refreshing data...", 'info');
-    testConnection();
-    getLatestSensor();
-}
-
-function autoRefresh() {
-    getLatestSensor();
-}
 
 function clearHistory() {
     sensorHistory = [];
